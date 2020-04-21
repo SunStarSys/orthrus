@@ -1,0 +1,15 @@
+- Refactor Output Formats, making it plugable.
+
+- Refactor UserDB storage, make the whole backend plugable. (support for LDAP storage of OTPs would be nice)
+
+- OSX User Interface for my own sanity.
+
+- Figure out what to do for RFC 2289 / 9.0 PROTECTION AGAINST RACE ATTACK.  The suggestion sucks.
+  This isn't an issue that the asf's intended use of orthrus (to manage sudo privs) needs to concern
+  itself with. 
+
+- ortpasswd could use a bit of humanization in its output.  It's currently spartan and assumes the user already knows what he/she is doing.
+
+- Remove APR-Util dependency (bundle crypto parts needed)
+
+- Investigate dropping APR dependency? (Bundle pocore?)

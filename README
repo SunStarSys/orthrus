@@ -1,0 +1,16 @@
+Orthrus is a C library and user interfaces for RFC 2289, 
+"A One-Time Password System (OTP)", also known as OPIE or S/Key. 
+
+-= Building =-
+Orthrus uses scons to build.  For most people, just run:
+   # scons
+   # scons install
+And Orthrus will be installed into /usr/local.
+
+To change where things are installed, or what APR is used, create a build.py,
+with something like this:
+
+APR="/usr/bin/apr-1-config"
+APRUTIL="/usr/bin/apu-1-config"
+PREFIX="/opt/othrus"
+
