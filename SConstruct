@@ -147,6 +147,7 @@ if appenv['PLATFORM'] != 'darwin':
 tests = appenv.Program(target='orthrustest', source = ['src/tests/orthrustest.c'])
 ortcalc = appenv.Program(target='ortcalc', source = ['src/ui/ortcalc/ortcalc.c'])
 ortpasswd = appenv.Program(target='ortpasswd', source = ['src/ui/ortpasswd/ortpasswd.c'])
+otp_sha1 = appenv.Program(target='otp-sha1', source = ['src/ui/ortcalc/ortcalc.c'])
 
 pamenv = appenv.Clone()
 pamenv.AppendUnique(LIBS='pam')
@@ -167,6 +168,7 @@ def hack_fileperms(env, obj):
   return obj
 
 install.extend(edit_path(env, env.Install(pjoin(env['DESTDIR'], env['PREFIX'], 'bin'), ortcalc)))
+install.extend(edit_path(env, env.Install(pjoin(env['DESTDIR'], env['PREFIX'], 'bin'), otp_sha1)))
 install.extend(hack_fileperms(env, edit_path(env, env.Install(pjoin(env['DESTDIR'], env['PREFIX'], 'bin'), ortpasswd))))
 install.extend(env.Install(pjoin(env['DESTDIR'], env['PREFIX'], 'lib'), lib))
 
@@ -216,7 +218,7 @@ if hasrpm:
   rpm = env.Package(**packaging)
 
 
-targets = [lib, pamorthrus, ortcalc, ortpasswd, tests]
+targets = [lib, pamorthrus, ortcalc, ortpasswd, tests, otp_sha1]
 env.Alias('install', install)
 env.Alias('dist', dist)
 if hasrpm:
