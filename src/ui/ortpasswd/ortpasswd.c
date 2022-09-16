@@ -147,14 +147,14 @@ int main(int argc, const char * const argv[])
                     rv);
     return 1;
   }
-  
+
   if (argc) {
     op.shortname = apr_filepath_name_get(argv[0]);
   }
   else {
     op.shortname = "ortpasswd";
   }
-  
+
   err = orthrus_create(op.pool, &op.ort);
 
   if (err) {
@@ -164,12 +164,12 @@ int main(int argc, const char * const argv[])
   }
 
   rv = apr_getopt_init(&opt, op.pool, argc, argv);
-  
+
   if (rv != APR_SUCCESS) {
     apr_file_printf(op.errfile, "apr_getopt_init failed."NL );
     return 1;
   }
-  
+
   while ((rv = apr_getopt(opt, "Vh", &ch, &optarg)) == APR_SUCCESS) {
     switch (ch) {
       case 'V':
@@ -180,7 +180,7 @@ int main(int argc, const char * const argv[])
         return 0;
     }
   }
-  
+
   if (rv != APR_EOF) {
     apr_file_printf(op.errfile, "Error: Parsing Arguments Failed" NL NL);
     usage(&op);
@@ -202,7 +202,7 @@ int main(int argc, const char * const argv[])
           goto generatenewcreds;
       }
       else {
-          apr_file_printf(op.errfile, "Error: Failed to get challenge for user %s at '%s': %s (%d)", 
+          apr_file_printf(op.errfile, "Error: Failed to get challenge for user %s at '%s': %s (%d)",
                                    pwd->pw_name, ortuserdb, err->msg, err->err);
           orthrus_userdb_close(op.ort);
           return 3;
@@ -214,7 +214,7 @@ int main(int argc, const char * const argv[])
 
   err = acquire_password(&op);
   if (err) {
-      apr_file_printf(op.errfile, "Error: Failed to acquire password for user %s: %s (%d)", 
+      apr_file_printf(op.errfile, "Error: Failed to acquire password for user %s: %s (%d)",
                       pwd->pw_name, err->msg, err->err);
       return 4;
   }
@@ -228,7 +228,7 @@ int main(int argc, const char * const argv[])
   err = orthrus_userdb_verify(op.ort, pwd->pw_name,
                               challenge, op.pwin);
   if (err) {
-      apr_file_printf(op.errfile, "Error: Failed to verify password for user %s: %s (%d)", 
+      apr_file_printf(op.errfile, "Error: Failed to verify password for user %s: %s (%d)",
                       pwd->pw_name, err->msg, err->err);
       orthrus_userdb_close(op.ort);
       return 5;
@@ -257,12 +257,12 @@ generatenewcreds:
   op.seed = apr_psprintf(op.pool, "%.2s%d", hostname, rand);
   op.num = INIT_SEQ;
 
-  challenge = apr_psprintf(op.pool, "otp-md5 %" APR_UINT64_T_FMT " %s", op.num, op.seed);
+  challenge = apr_psprintf(op.pool, "otp-sha1 %" APR_UINT64_T_FMT " %s", op.num, op.seed);
   apr_file_printf(op.errfile, "%s"NL, challenge);
 
   err = acquire_password(&op);
   if (err) {
-      apr_file_printf(op.errfile, "Error: Failed to acquire password for user %s: %s (%d)", 
+      apr_file_printf(op.errfile, "Error: Failed to acquire password for user %s: %s (%d)",
                       pwd->pw_name, err->msg, err->err);
       return 4;
   }
@@ -276,7 +276,7 @@ generatenewcreds:
   err = orthrus_userdb_save(op.ort, pwd->pw_name,
                             challenge, op.pwin);
   if (err) {
-      apr_file_printf(op.errfile, "Error: Failed to save password for user %s: %s (%d)", 
+      apr_file_printf(op.errfile, "Error: Failed to save password for user %s: %s (%d)",
                       pwd->pw_name, err->msg, err->err);
       orthrus_userdb_close(op.ort);
       return 5;
@@ -285,4 +285,3 @@ generatenewcreds:
   orthrus_userdb_close(op.ort);
   return 0;
 }
-

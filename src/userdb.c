@@ -99,7 +99,7 @@ static orthrus_error_t* userdb_get_user(orthrus_t *ort,
     if (*line == '#' || apr_isspace(*line)) {
       continue;
     }
-    
+
     /**
      * UserDB Format:
      * $username $sequence $seed $lastreply $date_of_last_use
@@ -111,7 +111,7 @@ static orthrus_error_t* userdb_get_user(orthrus_t *ort,
     if (!v) {
       continue;
     }
-    
+
     if (strcmp(v, username) != 0) {
       continue;
     }
@@ -137,7 +137,7 @@ static orthrus_error_t* userdb_get_user(orthrus_t *ort,
     if (!v) {
       return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d", lineno);
     }
-    
+
     user->lastreply = apr_pstrdup(ort->pool, v);
 
     break;
@@ -165,8 +165,8 @@ orthrus_error_t* orthrus_userdb_get_challenge(orthrus_t *ort,
   }
 
   /* TODO: Configurable algorithms */
-  *challenge = apr_psprintf(pool, "otp-md5 %u %s", user->ch.sequence - 1,  user->ch.seed);
-  
+  *challenge = apr_psprintf(pool, "otp-sha1 %u %s", user->ch.sequence - 1,  user->ch.seed);
+
   return ORTHRUS_SUCCESS;
 }
 
@@ -177,34 +177,34 @@ static orthrus_error_t* decode_challenge(orthrus_t *ort,
   char *strtok_state;
   char *v;
   char *p = apr_pstrdup(ort->pool, challenge);
-  
+
   /* len("otp-md5 1 a") = 11 */
   if (strlen(p) < 11) {
     return orthrus_error_create(APR_EGENERAL, "challenge string is too small.");
   }
-  
+
   p += 4;
 
-  if (strncmp("md5 ", p, 4) != 0) {
-    return orthrus_error_create(APR_ENOTIMPL, "only md5 verification is supported.");
+  if (strncmp("sha1 ", p, 5) != 0) {
+    return orthrus_error_create(APR_ENOTIMPL, "only sha1 verification is supported.");
   }
-  
-  p += 4;
-  
+
+  p += 5;
+
   v = apr_strtok(p, " ", &strtok_state);
-  
+
   if (!v) {
     return orthrus_error_create(APR_EGENERAL, "invalid challenge string when looking for sequence.");
   }
-  
+
   ch->sequence = apr_strtoi64(v, NULL, 10);
-  
+
   v = apr_strtok(NULL, " ", &strtok_state);
   if (!v) {
     return orthrus_error_create(APR_EGENERAL,
                                 "invalid challenge string when looking for seed.");
   }
-  
+
   ch->seed = apr_pstrdup(ort->pool, v);
 
   return ORTHRUS_SUCCESS;
@@ -217,10 +217,10 @@ static orthrus_error_t* decode_reply(orthrus_t *ort,
   orthrus_response_t *resp;
   /* TODO: Support Six word dictionary decoding.
    *  (note, its just a SHOULD from the RFC) */
-  
+
   /* RFC 2289 Section 6.0, "Form of Output":
-   * If a six-word encoded one-time password is valid, it is accepted.  
-   * Otherwise, if the one-time password can be interpreted as hexadecimal, and 
+   * If a six-word encoded one-time password is valid, it is accepted.
+   * Otherwise, if the one-time password can be interpreted as hexadecimal, and
    * with that decoding it is valid, then it is accepted.*/
   resp = apr_pcalloc(ort->pool, sizeof(orthrus_response_t));
   resp->pool = ort->pool;
@@ -342,7 +342,7 @@ orthrus_error_t* orthrus_userdb_verify(orthrus_t *ort,
   if (err != ORTHRUS_SUCCESS) {
     return err;
   }
-    
+
   if (strcmp(ch.seed, user->ch.seed) != 0) {
     return orthrus_error_create(APR_EGENERAL, "seed changed between challenge and verification.");
   }
@@ -359,13 +359,13 @@ orthrus_error_t* orthrus_userdb_verify(orthrus_t *ort,
 
   r = resp->reply;
 
-  err = orthrus__alg_md5_cycle(1, resp);
+  err = orthrus__alg_sha1_cycle(1, resp);
   if (err != ORTHRUS_SUCCESS) {
     return err;
   }
 
   orthrus__decode_hex(user->lastreply, &last);
-  
+
   if (last != resp->reply) {
     return orthrus_error_create(APR_EGENERAL, "invalid response.");
   }

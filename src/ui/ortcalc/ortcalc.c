@@ -137,14 +137,14 @@ int main(int argc, const char * const argv[])
                     rv);
     return 1;
   }
-  
+
   if (argc) {
     oc.shortname = apr_filepath_name_get(argv[0]);
   }
   else {
     oc.shortname = "ortcalc";
   }
-  
+
   err = orthrus_create(oc.pool, &oc.ort);
 
   if (err) {
@@ -154,7 +154,7 @@ int main(int argc, const char * const argv[])
   }
 
   rv = apr_getopt_init(&opt, oc.pool, argc, argv);
-  
+
   if (rv != APR_SUCCESS) {
     apr_file_printf(oc.errfile, "apr_getopt_init failed."NL );
     return 1;
@@ -164,9 +164,9 @@ int main(int argc, const char * const argv[])
     usage(&oc);
     return 1;
   }
-  
+
   opt->interleave = 1;
-  
+
   while ((rv = apr_getopt(opt, "VhH", &ch, &optarg)) == APR_SUCCESS) {
     switch (ch) {
       case 'V':
@@ -179,7 +179,7 @@ int main(int argc, const char * const argv[])
         oc.showhex = 1;
     }
   }
-  
+
   if (rv != APR_EOF) {
     apr_file_printf(oc.errfile, "Error: Parsing Arguments Failed" NL NL);
     usage(&oc);
@@ -202,7 +202,7 @@ int main(int argc, const char * const argv[])
     return 1;
   }
 
-  err = orthrus_calculate(oc.ort, &reply, ORTHRUS_ALG_MD5,
+  err = orthrus_calculate(oc.ort, &reply, ORTHRUS_ALG_SHA1,
                           oc.num, oc.seed,
                           oc.pwin, strlen(oc.pwin),
                           oc.pool);
@@ -230,4 +230,3 @@ int main(int argc, const char * const argv[])
 
   return 0;
 }
-
