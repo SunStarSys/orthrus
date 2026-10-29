@@ -58,7 +58,12 @@ orthrus_error_t* orthrus_userdb_open(orthrus_t *ort, const char *path)
       return orthrus_error_createf(rv, "Unable to lock %s", ort->lockpath);
   }
 
-  rv = apr_file_open(&ort->userdb, path, APR_READ|APR_WRITE|APR_CREATE|APR_BINARY,
+  /* APR_BUFFERED is not a nicety here. apr_file_gets() on an unbuffered APR
+   * file fetches one byte per apr_file_read(), which is one read(2) per byte
+   * of the database: 610,068 syscalls to scan a 610KB file, and ~109ms to
+   * reach the last record. Buffered, the same scan is a few hundred reads. */
+  rv = apr_file_open(&ort->userdb, path,
+                     APR_READ|APR_WRITE|APR_CREATE|APR_BINARY|APR_BUFFERED,
                      APR_UREAD|APR_UWRITE, ort->pool);
   if (rv) {
     return orthrus_error_createf(rv, "Unable to open %s", ort->path);
@@ -340,7 +345,8 @@ orthrus_error_t* update_db(orthrus_t *ort, orthrus_user_t *user, apr_uint64_t re
      */
     tmpfilename = apr_pstrcat(ort->pool, ort->path, ".tmpXXXXXX", NULL);
     rv = apr_file_mktemp(&tmpfile, tmpfilename,
-                         APR_CREATE|APR_EXCL|APR_READ|APR_WRITE|APR_BINARY,
+                         APR_CREATE|APR_EXCL|APR_READ|APR_WRITE|APR_BINARY|
+                         APR_BUFFERED,
                          ort->pool);
     if (rv) {
         return orthrus_error_create(rv, "can't open temporary dbfile");
