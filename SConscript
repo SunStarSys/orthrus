@@ -33,15 +33,24 @@ libinfo = SConscript(pjoin('src', 'SConscript'),
 lib = libinfo['lib']
 
 # Everything downstream links against liborthrus.
+#
+# Link by -L/-l rather than by handing the library node to LIBS. Passing the
+# node puts its path on the link line, and the linker then records that path
+# verbatim as the DT_NEEDED entry. Once the library moved into BUILD_DIR that
+# entry became "build/liborthrus-0.so", and a DT_NEEDED containing a slash is
+# resolved relative to the current directory with RPATH ignored entirely --
+# so the installed binaries could not start at all.
 appenv = env.Clone()
-appenv.AppendUnique(LIBS=lib)
+appenv.AppendUnique(LIBPATH=['#%s' % BUILD_DIR])
+appenv.AppendUnique(LIBS=['orthrus-%d' % VERSION.major])
 if appenv['PLATFORM'] != 'darwin':
-  # TODO: figure out whether the OS supports $ORIGIN-relative rpaths, which
-  # would let an installed binary find the library without an absolute path:
-  #   appenv.Append(LINKFLAGS=Split('-z origin'))
-  #   appenv.Append(RPATH=env.Literal(pjoin('\\$$ORIGIN', os.pardir, 'lib')))
-  # Until then, point at the install prefix.
-  appenv.Append(RPATH=[pjoin(env['PREFIX'], 'lib')])
+  # $ORIGIN covers the build tree, where the binaries sit beside the library;
+  # the install prefix covers the installed copies, whose $ORIGIN is the
+  # bindir. ld.so ignores $ORIGIN for setuid binaries, which is why ortpasswd
+  # still needs the absolute entry.
+  appenv.Append(LINKFLAGS=Split('-z origin'))
+  appenv.Append(RPATH=[appenv.Literal('\\$$ORIGIN'),
+                       pjoin(env['PREFIX'], 'lib')])
 
 uiinfo = SConscript(pjoin('src', 'ui', 'SConscript'),
                     exports={'env': appenv, 'BUILD_DIR': BUILD_DIR})
