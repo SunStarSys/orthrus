@@ -28,6 +28,7 @@ sources = [
     'md5.c',
     'sha1.c',
     'userdb.c',
+    'validate.c',
 ]
 
 # Objects land beside this SConscript's variant dir; the library itself goes

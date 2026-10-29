@@ -87,6 +87,13 @@ static orthrus_error_t* userdb_get_user(orthrus_t *ort,
   orthrus_user_t *user = NULL;
   apr_off_t start = 0;
   apr_status_t rv;
+  apr_uint64_t scratch;
+  orthrus_error_t *err;
+
+  err = orthrus__validate_username(username);
+  if (err) {
+    return err;
+  }
 
   rv = apr_file_seek(ort->userdb, APR_SET, &start);
   if (rv) {
@@ -124,11 +131,27 @@ static orthrus_error_t* userdb_get_user(orthrus_t *ort,
       return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d", lineno);
     }
 
-    user->ch.sequence = apr_strtoi64(v, NULL, 10);
+    /* Every field below is validated as it is read, so a corrupt or
+     * hand-edited record is reported against its line number instead of
+     * surfacing later as a mystery authentication failure. */
+    err = orthrus__validate_sequence(v, &user->ch.sequence);
+    if (err) {
+      orthrus_error_destroy(err);
+      return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d:"
+                                   " sequence is not a decimal number", lineno);
+    }
 
     v = apr_strtok(NULL, " ", &strtok_state);
     if (!v) {
       return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d", lineno);
+    }
+
+    err = orthrus__validate_seed(v);
+    if (err) {
+      orthrus_error_destroy(err);
+      return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d:"
+                                   " seed is not 1 to %d alphanumeric"
+                                   " characters", lineno, ORTHRUS_MAX_SEED_LEN);
     }
 
     user->ch.seed = apr_pstrdup(ort->pool, v);
@@ -136,6 +159,14 @@ static orthrus_error_t* userdb_get_user(orthrus_t *ort,
     v = apr_strtok(NULL, " ", &strtok_state);
     if (!v) {
       return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d", lineno);
+    }
+
+    err = orthrus__decode_hex(v, &scratch);
+    if (err) {
+      orthrus_error_destroy(err);
+      return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d:"
+                                   " stored response is not hexadecimal",
+                                   lineno);
     }
 
     user->lastreply = apr_pstrdup(ort->pool, v);
@@ -185,11 +216,21 @@ static orthrus_error_t* decode_challenge(orthrus_t *ort,
 {
   char *strtok_state;
   char *v;
-  char *p = apr_pstrdup(ort->pool, challenge);
+  char *p;
+  orthrus_error_t *err;
 
-  /* len("otp-md5 1 a") = 11 */
-  if (strlen(p) < 11) {
-    return orthrus_error_create(APR_EGENERAL, "challenge string is too small.");
+  if (challenge == NULL) {
+    return orthrus_error_create(APR_EGENERAL, "no challenge string given");
+  }
+
+  p = apr_pstrdup(ort->pool, challenge);
+
+  /* The four bytes used to be skipped on the strength of a length check
+   * alone, so anything at all could sit in front of the algorithm name.
+   * strncmp stops at a NUL, so no length check is needed to be safe. */
+  if (strncmp(p, "otp-", 4) != 0) {
+    return orthrus_error_create(APR_EGENERAL,
+                                "challenge does not begin with 'otp-'.");
   }
 
   p += 4;
@@ -206,12 +247,20 @@ static orthrus_error_t* decode_challenge(orthrus_t *ort,
     return orthrus_error_create(APR_EGENERAL, "invalid challenge string when looking for sequence.");
   }
 
-  ch->sequence = apr_strtoi64(v, NULL, 10);
+  err = orthrus__validate_sequence(v, &ch->sequence);
+  if (err) {
+    return err;
+  }
 
   v = apr_strtok(NULL, " ", &strtok_state);
   if (!v) {
     return orthrus_error_create(APR_EGENERAL,
                                 "invalid challenge string when looking for seed.");
+  }
+
+  err = orthrus__validate_seed(v);
+  if (err) {
+    return err;
   }
 
   ch->seed = apr_pstrdup(ort->pool, v);
@@ -439,6 +488,12 @@ orthrus_error_t* orthrus_userdb_save(orthrus_t *ort,
     orthrus_response_t *resp;
     orthrus_user_t user;
     orthrus_error_t *err;
+
+    /* This path writes a brand new record, and unlike the lookups it never
+     * passes through userdb_get_user(), so nothing else checks the name. */
+    err = orthrus__validate_username(username);
+    if (err)
+        return err;
 
     user.username = username;
     user.lastreply = NULL;

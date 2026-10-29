@@ -32,6 +32,16 @@ struct orthrus_t {
   const char *lockpath;
 };
 
+/* RFC 2289 Section 6.0 caps the seed at 16 characters. The user name bound
+ * is ours: it only has to keep a record inside ORT_USERDB_MAX_LINE_LEN. */
+#define ORTHRUS_MAX_SEED_LEN 16
+#define ORTHRUS_MAX_USERNAME_LEN 255
+
+orthrus_error_t* orthrus__validate_seed(const char *seed);
+orthrus_error_t* orthrus__validate_username(const char *username);
+orthrus_error_t* orthrus__validate_sequence(const char *input,
+                                            apr_uint32_t *out);
+
 
 orthrus_error_t* orthrus__alg_md4_fold(const char *seed,
                                        apr_size_t slen,

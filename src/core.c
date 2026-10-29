@@ -66,7 +66,9 @@ static char *strtolower(char *input)
 {
   char *p = input;
   while (*p != '\0') {
-    *p = tolower(*p);
+    /* tolower() takes an int that has to be representable as unsigned char
+     * or EOF; char is signed here, so a high-bit byte would be undefined. */
+    *p = (char) tolower((unsigned char) *p);
     p++;
   }
   return input;
@@ -110,20 +112,22 @@ orthrus_error_t* orthrus_calculate(orthrus_t *ort,
    * The seed MUST be case insensitive and MUST be internally converted to
    * lower case before it is processed.
    */
+  if (in_seed == NULL) {
+    return orthrus_error_create(APR_BADARG, "no seed given");
+  }
+
   seed = strtolower(apr_pstrdup(pool, in_seed));
 
-  /* TODO: Figure out what characters are actualy used, is [a-z0-9] actually 
-   * enough ? */
   /*
    * The seed MUST consist of purely alphanumeric characters and MUST be
    * of one to 16 characters in length.
    */
-  slen = strlen(seed);
-  if (slen < 1 || slen > 16) {
-    return orthrus_error_createf(APR_BADARG, "Seed of length %"
-                                 APR_SIZE_T_FMT" was given. Seed must be "
-                                 "between 1 and 16 characters", slen);
+  err = orthrus__validate_seed(seed);
+  if (err) {
+    return err;
   }
+
+  slen = strlen(seed);
 
   /* RFC 2289 Section 6.0, "Form of Inputs":
    * The secret pass-phrase MUST be at least 10 characters long and SHOULD
