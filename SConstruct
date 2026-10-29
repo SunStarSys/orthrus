@@ -25,7 +25,7 @@ from os.path import dirname
 opts = Variables('build.py', ARGUMENTS)
 
 def read_version(prefix, path):
-  version_re = re.compile("(.*)%s_(?P<id>MAJOR|MINOR|PATCH)_VERSION(\s+)(?P<num>\d)(.*)" % prefix)
+  version_re = re.compile(r"(.*)%s_(?P<id>MAJOR|MINOR|PATCH)_VERSION(\s+)(?P<num>\d)(.*)" % prefix)
   versions = {}
   fp = open(path, 'rb')
   for line in fp.readlines():
@@ -73,9 +73,9 @@ orthrus_vstring = "%d.%d.%d"  % (orthrus_major, orthrus_minor, orthrus_patch)
 opts.Add(PathVariable('PREFIX', 'Prefix of where to install', '/usr/local', validator=PathVariable.PathAccept))
 opts.Add(PathVariable('DESTDIR', 'Prefix for packaging purposes', '/', validator=PathVariable.PathAccept))
 opts.Add(PathVariable('APR', 'Path to apr-1-config',
-    WhereIs('apr-1-config') or '/usr/local/bin/apr-1-config', validator=PathVariable.PathIsFile))
+   '/bin/apr-1-config', validator=PathVariable.PathIsFile))
 opts.Add(PathVariable('APRUTIL', 'Path apu-1-config',
-    WhereIs('apu-1-config') or '/usr/local/bin/apu-1-config', validator=PathVariable.PathIsFile))
+    '/bin/apu-1-config', validator=PathVariable.PathIsFile))
 
 opts.Add(BoolVariable('DEBUG', 'Compile in debug mode', True))
 
@@ -95,29 +95,29 @@ lib = env.SharedLibrary(target='orthrus-%d' % (orthrus_major),
 headers = env.Glob('include/*.h')
 headers.append(env.File('include/private/context.h'))
 
-conf = env.Configure(config_h='include/private/config.h', custom_tests = { 'CheckEndian' : checkEndian, 'CheckVasprintf': check_vasprintf })
+conf = env.Configure(config_h='include/private/config.h')#, custom_tests = { 'CheckEndian' : checkEndian, 'CheckVasprintf': check_vasprintf })
 
-cc = conf.env.WhereIs('clang') or conf.env.WhereIs('/Developer/usr/bin/clang')
+cc = ''#conf.env.WhereIs('clang') or conf.env.WhereIs('/Developer/usr/bin/clang')
 if 'CC' in os.environ:
   cc = os.environ['CC']
 if cc:
-  conf.env['CC'] = cc
+  conf.env['CC'] = 'gcc'
 
-conf.CheckCHeader("security/pam_modules.h")
-conf.CheckCHeader("pam/pam_modules.h")
-conf.CheckCHeader("security/pam_appl.h")
-conf.CheckCHeader("pam/pam_appl.h")
+#conf.CheckCHeader("security/pam_modules.h")
+#conf.CheckCHeader("pam/pam_modules.h")
+#conf.CheckCHeader("security/pam_appl.h")
+#conf.CheckCHeader("pam/pam_appl.h")
 
-if conf.CheckEndian() == "big":
-  conf.env.AppendUnique(CPPFLAGS=['-DBIGENDIAN'])
+#if conf.CheckEndian() == "big":
+#  conf.env.AppendUnique(CPPFLAGS=['-DBIGENDIAN'])
 
-if conf.CheckVasprintf():
-  conf.env.AppendUnique(CPPFLAGS=['-DHAVE_VASPRINTF'])
+#if conf.CheckVasprintf():
+#  conf.env.AppendUnique(CPPFLAGS=['-DHAVE_VASPRINTF'])
 
-if conf.CheckDeclaration("__GNUC__"):
+#if conf.CheckDeclaration("__GNUC__"):
   conf.env['HAVE_GCC_LIKE'] = True
-else:
-  conf.env['HAVE_GCC_LIKE'] = False
+#else:
+#  conf.env['HAVE_GCC_LIKE'] = False
 
 env = conf.Finish()
 
@@ -131,7 +131,7 @@ else:
 if env['HAVE_GCC_LIKE']:
   env.AppendUnique(CFLAGS=['-Wall'])
 
-env.AppendUnique(RPATH = env['LIBPATH'])
+#env.AppendUnique(RPATH = env['LIBPATH'])
 
 appenv = env.Clone()
 appenv.AppendUnique(LIBS=lib)
@@ -211,7 +211,7 @@ packaging['PACKAGETYPE'] = 'src_targz'
 tb = env.Package(**packaging)
 dist.extend([tb, env.HashFile(tb)])
 
-hasrpm = env.WhereIs('rpmbuild')
+hasrpm = ''#env.WhereIs('rpmbuild')
 if hasrpm:
   packaging['PACKAGETYPE'] = 'rpm'
   del packaging['source'];
