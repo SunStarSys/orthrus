@@ -1,0 +1,45 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# liborthrus: the one-time password library itself.
+
+Import('env', 'VERSION', 'BUILD_DIR')
+
+sources = [
+    'core.c',
+    'error.c',
+    'hex.c',
+    'words.c',
+    'md4.c',
+    'md5.c',
+    'sha1.c',
+    'userdb.c',
+]
+
+# Objects land beside this SConscript's variant dir; the library itself goes
+# to the top of BUILD_DIR so every final artifact is a sibling.
+lib = env.SharedLibrary(
+    target='#%s/orthrus-%d' % (BUILD_DIR, VERSION.major),
+    source=sources)
+
+result = {
+    'lib': lib,
+    # srcnode() maps the variant-dir path back to src/*.c for the tarball.
+    'dist_sources': [File(s).srcnode() for s in sources],
+}
+
+Return('result')

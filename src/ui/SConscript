@@ -1,0 +1,57 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# User interfaces: the command line tools and the PAM module.  'env' here is
+# the application environment, already linked against liborthrus.
+
+Import('env', 'BUILD_DIR')
+
+
+def built(name):
+  """Final artifacts sit at the top of BUILD_DIR, objects stay in the variant
+  dir next to this SConscript."""
+  return '#%s/%s' % (BUILD_DIR, name)
+
+
+ortcalc_sources = ['ortcalc/ortcalc.c']
+ortpasswd_sources = ['ortpasswd/ortpasswd.c']
+pam_sources = ['pam/pam_orthrus.c']
+
+ortcalc = env.Program(target=built('ortcalc'), source=ortcalc_sources)
+ortpasswd = env.Program(target=built('ortpasswd'), source=ortpasswd_sources)
+
+# otp-sha1 is the same program under the name RFC 2289 implementations
+# traditionally install it as.
+otp_sha1 = env.Program(target=built('otp-sha1'), source=ortcalc_sources)
+
+pamenv = env.Clone()
+pamenv.AppendUnique(LIBS='pam')
+pam = pamenv.LoadableModule(target=built('pam_orthrus.so'),
+                            source=pam_sources,
+                            SHLIBPREFIX='')
+
+result = {
+    'ortcalc': ortcalc,
+    'ortpasswd': ortpasswd,
+    'otp_sha1': otp_sha1,
+    'pam': pam,
+    # srcnode() maps the variant-dir paths back to src/ui/* for the tarball.
+    'dist_sources': [File(s).srcnode()
+                     for s in ortcalc_sources + ortpasswd_sources + pam_sources],
+}
+
+Return('result')
