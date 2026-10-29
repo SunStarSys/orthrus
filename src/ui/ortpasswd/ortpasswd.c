@@ -188,6 +188,14 @@ int main(int argc, const char * const argv[])
   }
 
   pwd = getpwuid(getuid());
+  if (pwd == NULL) {
+    /* No passwd entry for the real uid -- a directory service being down is
+     * enough. Every pwd->pw_name below would have dereferenced NULL, in a
+     * setuid binary. */
+    apr_file_printf(op.errfile, "Error: no password file entry for uid %lu" NL,
+                    (unsigned long) getuid());
+    return 7;
+  }
 
   err = orthrus_userdb_open(op.ort, ortuserdb);
   if (err) {

@@ -79,9 +79,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include <syslog.h>
 
+#include <apr_general.h>
 #include <apr_strings.h>
 
 #ifndef PAM_EXTERN
@@ -89,6 +91,77 @@
 #endif
 
 #define ORT_LOG_ERR(fmt, args...) syslog(LOG_ERR, fmt , ## args)
+
+/* Under OpenPAM the password belongs to pam_get_authtok() and must not be
+ * freed; elsewhere it is ours, from the conversation's response. */
+#ifdef OPENPAM
+#define ORT_FREE_PASSWORD(p) ((void)(p))
+#else
+#define ORT_FREE_PASSWORD(p) free(p)
+#endif
+
+/* APR is initialised once per process and never terminated.
+ *
+ * This module used to pair apr_initialize()/apr_terminate() around every
+ * authentication. apr_initialize() is reference counted but not atomic, so
+ * in a threaded server two concurrent authentications race on the count,
+ * and one thread's apr_terminate() can tear down APR's global state while
+ * the other is still inside it. A loadable module also has no business
+ * terminating global state it does not exclusively own -- in a host that
+ * uses APR itself, such as httpd, that teardown is not ours to do.
+ *
+ * Leaving APR initialised for the life of the process is the conventional
+ * answer: the process exiting reclaims it.
+ */
+static pthread_once_t ort_apr_once = PTHREAD_ONCE_INIT;
+static apr_status_t ort_apr_status = APR_SUCCESS;
+static unsigned char ort_decoy_salt[16];
+
+static void ort_apr_init(void)
+{
+  ort_apr_status = apr_initialize();
+
+  if (ort_apr_status == APR_SUCCESS) {
+    /* Seeded here so that it happens exactly once, under the same guard,
+     * rather than racing in decoy_challenge() below. */
+    ort_apr_status = apr_generate_random_bytes(ort_decoy_salt,
+                                               sizeof ort_decoy_salt);
+  }
+}
+
+/* A decoy challenge for a user with no OTP credentials.
+ *
+ * Returning PAM_USER_UNKNOWN straight away, without ever running the
+ * conversation, told an attacker exactly which accounts have OTP enrolled:
+ * the result code differed and no password was ever asked for. We now
+ * prompt as usual and fail with PAM_AUTH_ERR, so the two cases look alike.
+ *
+ * The decoy is derived from the user name and a per-process salt, so it is
+ * stable within one authentication but not predictable from the source.
+ * Note the residual leak: because the salt is per process, repeated probes
+ * of the same unknown user vary where a real user's challenge would not.
+ * Closing that needs decoy state persisted across processes, which is a
+ * design change rather than a fix.
+ */
+static const char *decoy_challenge(apr_pool_t *pool, const char *user)
+{
+  apr_uint32_t h = 5381;
+  const unsigned char *p;
+  unsigned i;
+
+  for (i = 0; i < sizeof ort_decoy_salt; i++) {
+    h = (h * 33) ^ ort_decoy_salt[i];
+  }
+  for (p = (const unsigned char *) user; *p; p++) {
+    h = (h * 33) ^ *p;
+  }
+
+  /* Same shape a real challenge has: two letters then four digits. */
+  return apr_psprintf(pool, "otp-sha1 %u %c%c%04u",
+                      400 + (h % 100),
+                      'a' + (h % 26), 'a' + ((h >> 5) % 26),
+                      (h >> 10) % 10000);
+}
 
 PAM_EXTERN int
 pam_sm_authenticate(pam_handle_t *pamh, int flags,
@@ -110,10 +183,11 @@ pam_sm_authenticate(pam_handle_t *pamh, int flags,
 	const char *user;
 	char *password = NULL;
 	int pam_err, retry;
-  
+  int unknown_user = 0;
+
 	(void)argc;
 	(void)argv;
-  
+
 	/* identify user */
 	if ((pam_err = pam_get_user(pamh, &user, NULL)) != PAM_SUCCESS) {
 		return (pam_err);
@@ -122,8 +196,13 @@ pam_sm_authenticate(pam_handle_t *pamh, int flags,
 	if ((pwd = getpwnam(user)) == NULL) {
 		return (PAM_USER_UNKNOWN);
   }
-  
-  apr_initialize();
+
+  pthread_once(&ort_apr_once, ort_apr_init);
+  if (ort_apr_status != APR_SUCCESS) {
+    ORT_LOG_ERR("pam_orthrus: apr_initialize failed with: %d", ort_apr_status);
+    return (PAM_SYSTEM_ERR);
+  }
+
   apr_pool_create(&pool, NULL);
 
   err = orthrus_create(pool, &ort);
@@ -131,7 +210,6 @@ pam_sm_authenticate(pam_handle_t *pamh, int flags,
     ORT_LOG_ERR("pam_orthrus: create failed with: %s (%d)", err->msg, err->err);
     orthrus_error_destroy(err);
     apr_pool_destroy(pool);
-    apr_terminate();
 		return (PAM_SYSTEM_ERR);
   }
 
@@ -142,26 +220,32 @@ pam_sm_authenticate(pam_handle_t *pamh, int flags,
                 ortuserdb, err->msg, err->err);
     orthrus_error_destroy(err);
     apr_pool_destroy(pool);
-    apr_terminate();
 		return (PAM_SYSTEM_ERR);
   }
 
   err = orthrus_userdb_get_challenge(ort, pwd->pw_name, &challenge, pool);
   if (err) {
-    ORT_LOG_ERR("pam_orthrus: failed to get challenge for user %s at '%s': %s (%d)", 
-                pwd->pw_name, ortuserdb, err->msg, err->err);
-    orthrus_userdb_close(ort);
-    apr_pool_destroy(pool);
-    apr_terminate();
     if (err->err == APR_NOTFOUND) {
-        orthrus_error_destroy(err);
-        return PAM_USER_UNKNOWN;
+      /* No OTP credentials. Carry on with a decoy challenge and fail after
+       * the conversation, so this is indistinguishable from a wrong
+       * one-time password. */
+      orthrus_error_destroy(err);
+      unknown_user = 1;
+      challenge = decoy_challenge(pool, pwd->pw_name);
+      if (challenge == NULL) {
+        orthrus_userdb_close(ort);
+        apr_pool_destroy(pool);
+        return (PAM_SYSTEM_ERR);
+      }
     }
     else {
-        orthrus_error_destroy(err);
-        return (PAM_SYSTEM_ERR);
+      ORT_LOG_ERR("pam_orthrus: failed to get challenge for user %s at '%s': %s (%d)",
+                  pwd->pw_name, ortuserdb, err->msg, err->err);
+      orthrus_error_destroy(err);
+      orthrus_userdb_close(ort);
+      apr_pool_destroy(pool);
+      return (PAM_SYSTEM_ERR);
     }
-
   }
 
   err = orthrus_userdb_close(ort);
@@ -169,7 +253,6 @@ pam_sm_authenticate(pam_handle_t *pamh, int flags,
     ORT_LOG_ERR("pam_orthrus: Failed to close userdb at '%s': %s (%d)", ortuserdb, err->msg, err->err);
     orthrus_error_destroy(err);
     apr_pool_destroy(pool);
-    apr_terminate();
 		return (PAM_SYSTEM_ERR);
   }
   
@@ -180,7 +263,6 @@ pam_sm_authenticate(pam_handle_t *pamh, int flags,
 	pam_err = pam_get_item(pamh, PAM_CONV, (const void **)&conv);
 	if (pam_err != PAM_SUCCESS) {
     apr_pool_destroy(pool);
-    apr_terminate();
 		return (PAM_SYSTEM_ERR);
   }
 	msg.msg_style = PAM_PROMPT_ECHO_OFF;
@@ -210,23 +292,37 @@ pam_sm_authenticate(pam_handle_t *pamh, int flags,
 	}
 
   if (pam_err == PAM_CONV_ERR) {
+    ORT_FREE_PASSWORD(password);
     apr_pool_destroy(pool);
-    apr_terminate();
 		return (pam_err);
   }
 
 	if (pam_err != PAM_SUCCESS) {
+    ORT_FREE_PASSWORD(password);
     apr_pool_destroy(pool);
-    apr_terminate();
 		return (PAM_AUTH_ERR);
   }
-  
+
+  /* A conversation may report success and still hand back nothing. */
+  if (password == NULL) {
+    apr_pool_destroy(pool);
+		return (PAM_AUTH_ERR);
+  }
+
+  /* The user has no credentials; everything above ran only so that this
+   * looks the same as a wrong one-time password. */
+  if (unknown_user) {
+    ORT_FREE_PASSWORD(password);
+    apr_pool_destroy(pool);
+		return (PAM_AUTH_ERR);
+  }
+
   err = orthrus_userdb_open(ort, ortuserdb);
   if (err) {
     ORT_LOG_ERR("pam_orthrus: Failed to open userdb at '%s' to verify: %s (%d)", ortuserdb, err->msg, err->err);
     orthrus_error_destroy(err);
+    ORT_FREE_PASSWORD(password);
     apr_pool_destroy(pool);
-    apr_terminate();
 		return (PAM_SYSTEM_ERR);
   }
 
@@ -245,10 +341,7 @@ pam_sm_authenticate(pam_handle_t *pamh, int flags,
   orthrus_userdb_close(ort);
 
   apr_pool_destroy(pool);
-  apr_terminate();
-#ifndef OPENPAM
-	free(password);
-#endif
+  ORT_FREE_PASSWORD(password);
 	return (pam_err);
 }
 

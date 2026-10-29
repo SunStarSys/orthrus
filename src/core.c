@@ -31,6 +31,9 @@ typedef orthrus_error_t* (*alg_fold_t)(const char *seed,
 typedef orthrus_error_t* (*alg_cycle_t)(apr_uint64_t sequence,
                                        orthrus_response_t *reply);
 
+/* RFC 2289 Section 6.0: pass-phrases MUST be at least 10 characters. */
+#define ORTHRUS_MIN_PASSPHRASE_LEN 10
+
 typedef struct alg_impl_t {
   int id;
   const char *name;
@@ -120,6 +123,21 @@ orthrus_error_t* orthrus_calculate(orthrus_t *ort,
     return orthrus_error_createf(APR_BADARG, "Seed of length %"
                                  APR_SIZE_T_FMT" was given. Seed must be "
                                  "between 1 and 16 characters", slen);
+  }
+
+  /* RFC 2289 Section 6.0, "Form of Inputs":
+   * The secret pass-phrase MUST be at least 10 characters long and SHOULD
+   * be at least 16.
+   *
+   * Nothing enforced this, so an empty pass-phrase produced a perfectly
+   * valid-looking OTP sequence that is trivial to brute force.
+   */
+  if (pw == NULL || pwlen < ORTHRUS_MIN_PASSPHRASE_LEN) {
+    return orthrus_error_createf(APR_BADARG, "Pass-phrase of length %"
+                                 APR_SIZE_T_FMT" was given. RFC 2289 requires "
+                                 "at least %d characters",
+                                 pw == NULL ? (apr_size_t)0 : pwlen,
+                                 ORTHRUS_MIN_PASSPHRASE_LEN);
   }
 
   

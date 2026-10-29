@@ -61,7 +61,7 @@ orthrus_error_t* orthrus__alg_sha1_cycle(apr_uint64_t sequence,
                                         orthrus_response_t *reply);
 
 void orthrus__format_hex(orthrus_response_t *reply, apr_pool_t *pool);
-void orthrus__decode_hex(const char *input, apr_uint64_t *output);
+orthrus_error_t* orthrus__decode_hex(const char *input, apr_uint64_t *output);
 void orthrus__format_words(orthrus_response_t *reply, apr_pool_t *pool);
 orthrus_error_t* orthrus__decode_words(const char *words, apr_uint64_t *out);
 
