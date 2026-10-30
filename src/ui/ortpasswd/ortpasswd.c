@@ -127,6 +127,7 @@ int main(int argc, const char * const argv[])
   const char *challenge;
   int rand;
   char hostname[256];
+  char prefix[3];
 
   apr_app_initialize(&argc, &argv, NULL);
   atexit(apr_terminate);
@@ -188,6 +189,14 @@ int main(int argc, const char * const argv[])
   }
 
   pwd = getpwuid(getuid());
+  if (pwd == NULL) {
+    /* No passwd entry for the real uid -- a directory service being down is
+     * enough. Every pwd->pw_name below would have dereferenced NULL, in a
+     * setuid binary. */
+    apr_file_printf(op.errfile, "Error: no password file entry for uid %lu" NL,
+                    (unsigned long) getuid());
+    return 7;
+  }
 
   err = orthrus_userdb_open(op.ort, ortuserdb);
   if (err) {
@@ -247,14 +256,38 @@ generatenewcreds:
       return 6;
   }
 
-  if (hostname[0]) {
-      if (isupper(hostname[0]))
-          hostname[0] = tolower(hostname[0]);
-      if (hostname[1] && isupper(hostname[1]))
-          hostname[1] = tolower(hostname[1]);
+  /* RFC 2289 requires a purely alphanumeric seed, and the library now
+   * enforces it. A host name may legitimately hold characters that are
+   * not -- a leading digit is fine, but '-' and '.' are common -- so take
+   * the first two usable letters or digits and fall back to 'ot' when the
+   * name offers none.  isupper()/tolower() take an int representable as
+   * unsigned char; hostname is a plain char array, so cast. */
+  {
+    int i, taken = 0;
+
+    for (i = 0; hostname[i] && taken < 2; i++) {
+      unsigned char c = (unsigned char) hostname[i];
+
+      if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+          prefix[taken++] = (char) c;
+      }
+      else if (c >= 'A' && c <= 'Z') {
+          prefix[taken++] = (char) tolower(c);
+      }
+    }
+
+    if (taken == 0) {
+      prefix[taken++] = 'o';
+      prefix[taken++] = 't';
+    }
+    else if (taken == 1) {
+      prefix[taken++] = 't';
+    }
+
+    prefix[taken] = '\0';
   }
 
-  op.seed = apr_psprintf(op.pool, "%.2s%d", hostname, rand);
+  op.seed = apr_psprintf(op.pool, "%s%d", prefix, rand);
   op.num = INIT_SEQ;
 
   challenge = apr_psprintf(op.pool, "otp-sha1 %" APR_UINT64_T_FMT " %s", op.num, op.seed);

@@ -1,0 +1,19 @@
+# Everything the build generates (see BUILD_DIR in SConstruct).
+/build/
+
+# SCons bookkeeping.
+.sconsign.dblite
+.sconf_temp/
+config.log
+
+# Release tarballs, their digests, and the staging dir, from `scons dist`.
+/orthrus-*.tar.gz*
+/orthrus-*.tar.bz2*
+/orthrus-[0-9]*/
+
+# Stale in-tree artifacts from the pre-BUILD_DIR layout.
+*.o
+*.os
+*.so
+__pycache__/
+*.pyc

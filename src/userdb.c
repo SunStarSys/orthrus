@@ -58,7 +58,12 @@ orthrus_error_t* orthrus_userdb_open(orthrus_t *ort, const char *path)
       return orthrus_error_createf(rv, "Unable to lock %s", ort->lockpath);
   }
 
-  rv = apr_file_open(&ort->userdb, path, APR_READ|APR_WRITE|APR_CREATE|APR_BINARY,
+  /* APR_BUFFERED is not a nicety here. apr_file_gets() on an unbuffered APR
+   * file fetches one byte per apr_file_read(), which is one read(2) per byte
+   * of the database: 610,068 syscalls to scan a 610KB file, and ~109ms to
+   * reach the last record. Buffered, the same scan is a few hundred reads. */
+  rv = apr_file_open(&ort->userdb, path,
+                     APR_READ|APR_WRITE|APR_CREATE|APR_BINARY|APR_BUFFERED,
                      APR_UREAD|APR_UWRITE, ort->pool);
   if (rv) {
     return orthrus_error_createf(rv, "Unable to open %s", ort->path);
@@ -87,6 +92,13 @@ static orthrus_error_t* userdb_get_user(orthrus_t *ort,
   orthrus_user_t *user = NULL;
   apr_off_t start = 0;
   apr_status_t rv;
+  apr_uint64_t scratch;
+  orthrus_error_t *err;
+
+  err = orthrus__validate_username(username);
+  if (err) {
+    return err;
+  }
 
   rv = apr_file_seek(ort->userdb, APR_SET, &start);
   if (rv) {
@@ -124,11 +136,27 @@ static orthrus_error_t* userdb_get_user(orthrus_t *ort,
       return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d", lineno);
     }
 
-    user->ch.sequence = apr_strtoi64(v, NULL, 10);
+    /* Every field below is validated as it is read, so a corrupt or
+     * hand-edited record is reported against its line number instead of
+     * surfacing later as a mystery authentication failure. */
+    err = orthrus__validate_sequence(v, &user->ch.sequence);
+    if (err) {
+      orthrus_error_destroy(err);
+      return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d:"
+                                   " sequence is not a decimal number", lineno);
+    }
 
     v = apr_strtok(NULL, " ", &strtok_state);
     if (!v) {
       return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d", lineno);
+    }
+
+    err = orthrus__validate_seed(v);
+    if (err) {
+      orthrus_error_destroy(err);
+      return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d:"
+                                   " seed is not 1 to %d alphanumeric"
+                                   " characters", lineno, ORTHRUS_MAX_SEED_LEN);
     }
 
     user->ch.seed = apr_pstrdup(ort->pool, v);
@@ -136,6 +164,14 @@ static orthrus_error_t* userdb_get_user(orthrus_t *ort,
     v = apr_strtok(NULL, " ", &strtok_state);
     if (!v) {
       return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d", lineno);
+    }
+
+    err = orthrus__decode_hex(v, &scratch);
+    if (err) {
+      orthrus_error_destroy(err);
+      return orthrus_error_createf(APR_EGENERAL, "userdb corrupted at line %d:"
+                                   " stored response is not hexadecimal",
+                                   lineno);
     }
 
     user->lastreply = apr_pstrdup(ort->pool, v);
@@ -164,6 +200,15 @@ orthrus_error_t* orthrus_userdb_get_challenge(orthrus_t *ort,
     return err;
   }
 
+  /* Sequence 0 means the chain is used up. Without this the subtraction
+   * below wraps an apr_uint32_t to 4294967295 and hands out challenges for
+   * a sequence that was never initialised. */
+  if (user->ch.sequence == 0) {
+    return orthrus_error_create(APR_EGENERAL,
+                                "OTP sequence is exhausted, re-initialize "
+                                "it with ortpasswd");
+  }
+
   /* TODO: Configurable algorithms */
   *challenge = apr_psprintf(pool, "otp-sha1 %u %s", user->ch.sequence - 1,  user->ch.seed);
 
@@ -176,11 +221,21 @@ static orthrus_error_t* decode_challenge(orthrus_t *ort,
 {
   char *strtok_state;
   char *v;
-  char *p = apr_pstrdup(ort->pool, challenge);
+  char *p;
+  orthrus_error_t *err;
 
-  /* len("otp-md5 1 a") = 11 */
-  if (strlen(p) < 11) {
-    return orthrus_error_create(APR_EGENERAL, "challenge string is too small.");
+  if (challenge == NULL) {
+    return orthrus_error_create(APR_EGENERAL, "no challenge string given");
+  }
+
+  p = apr_pstrdup(ort->pool, challenge);
+
+  /* The four bytes used to be skipped on the strength of a length check
+   * alone, so anything at all could sit in front of the algorithm name.
+   * strncmp stops at a NUL, so no length check is needed to be safe. */
+  if (strncmp(p, "otp-", 4) != 0) {
+    return orthrus_error_create(APR_EGENERAL,
+                                "challenge does not begin with 'otp-'.");
   }
 
   p += 4;
@@ -197,12 +252,20 @@ static orthrus_error_t* decode_challenge(orthrus_t *ort,
     return orthrus_error_create(APR_EGENERAL, "invalid challenge string when looking for sequence.");
   }
 
-  ch->sequence = apr_strtoi64(v, NULL, 10);
+  err = orthrus__validate_sequence(v, &ch->sequence);
+  if (err) {
+    return err;
+  }
 
   v = apr_strtok(NULL, " ", &strtok_state);
   if (!v) {
     return orthrus_error_create(APR_EGENERAL,
                                 "invalid challenge string when looking for seed.");
+  }
+
+  err = orthrus__validate_seed(v);
+  if (err) {
+    return err;
   }
 
   ch->seed = apr_pstrdup(ort->pool, v);
@@ -215,6 +278,7 @@ static orthrus_error_t* decode_reply(orthrus_t *ort,
                                     orthrus_response_t **out_resp)
 {
   orthrus_response_t *resp;
+  orthrus_error_t *err;
   /* TODO: Support Six word dictionary decoding.
    *  (note, its just a SHOULD from the RFC) */
 
@@ -222,15 +286,45 @@ static orthrus_error_t* decode_reply(orthrus_t *ort,
    * If a six-word encoded one-time password is valid, it is accepted.
    * Otherwise, if the one-time password can be interpreted as hexadecimal, and
    * with that decoding it is valid, then it is accepted.*/
+  if (reply == NULL) {
+    return orthrus_error_create(APR_BADARG, "no response given");
+  }
+
   resp = apr_pcalloc(ort->pool, sizeof(orthrus_response_t));
   resp->pool = ort->pool;
 
-  if (orthrus__decode_words(reply, &resp->reply) != ORTHRUS_SUCCESS)
-      orthrus__decode_hex(reply, &resp->reply);
+  err = orthrus__decode_words(reply, &resp->reply);
+  if (err) {
+    orthrus_error_destroy(err);
+
+    /* Not six words, so it has to be the hexadecimal form. If that fails
+     * too the response is simply malformed: previously both decoders could
+     * fail and we carried on with whatever was left in resp->reply (zero,
+     * for anything with no hex digits at all) and hashed it anyway. */
+    err = orthrus__decode_hex(reply, &resp->reply);
+    if (err) {
+      return err;
+    }
+  }
 
   *out_resp =  resp;
 
   return ORTHRUS_SUCCESS;
+}
+
+/* Does this userdb line belong to username?
+ *
+ * The whole first field has to match. A bare strncmp() prefix test also
+ * matches "bobby" and "bobbysue" while updating "bob", and update_db() then
+ * rewrites those records as the user being updated -- destroying their
+ * credentials. Fields are separated by ' ', which is how userdb_get_user()
+ * tokenizes and how the records below are written.
+ */
+static int line_matches_user(const char *line, const char *username)
+{
+    apr_size_t len = strlen(username);
+
+    return strncmp(line, username, len) == 0 && line[len] == ' ';
 }
 
 static
@@ -242,9 +336,18 @@ orthrus_error_t* update_db(orthrus_t *ort, orthrus_user_t *user, apr_uint64_t re
     apr_file_t *tmpfile;
     apr_off_t start = 0;
 
-    tmpfilename = apr_pstrcat(ort->pool, ort->path, ".tmp", NULL);
-    rv = apr_file_open(&tmpfile, tmpfilename, APR_READ|APR_WRITE|APR_CREATE|APR_BINARY,
-                     APR_UREAD|APR_UWRITE, ort->pool);
+    /* Unique name, created O_CREAT|O_EXCL, so we never write through a file
+     * that was already there. A fixed ".tmp" opened without APR_TRUNCATE let
+     * trailing bytes of a longer previous file survive past the new contents
+     * and get renamed over the userdb: a stale file from a crash corrupts the
+     * database, and a planted one injects an entry outright. APR_EXCL also
+     * means we cannot be redirected through a symlink left at that path.
+     */
+    tmpfilename = apr_pstrcat(ort->pool, ort->path, ".tmpXXXXXX", NULL);
+    rv = apr_file_mktemp(&tmpfile, tmpfilename,
+                         APR_CREATE|APR_EXCL|APR_READ|APR_WRITE|APR_BINARY|
+                         APR_BUFFERED,
+                         ort->pool);
     if (rv) {
         return orthrus_error_create(rv, "can't open temporary dbfile");
     }
@@ -260,7 +363,7 @@ orthrus_error_t* update_db(orthrus_t *ort, orthrus_user_t *user, apr_uint64_t re
         apr_time_exp_t t;
         apr_size_t tsize, wsize;
 
-        if (strncmp(line, user->username, strlen(user->username)) != 0) {
+        if (!line_matches_user(line, user->username)) {
             rv = apr_file_write_full(tmpfile, line, strlen(line), &wsize);
             if (rv) {
                 apr_file_close(tmpfile);
@@ -338,6 +441,12 @@ orthrus_error_t* orthrus_userdb_verify(orthrus_t *ort,
     return err;
   }
 
+  if (user->ch.sequence == 0) {
+    return orthrus_error_create(APR_EGENERAL,
+                                "OTP sequence is exhausted, re-initialize "
+                                "it with ortpasswd");
+  }
+
   err = decode_challenge(ort, challenge, &ch);
   if (err != ORTHRUS_SUCCESS) {
     return err;
@@ -364,7 +473,10 @@ orthrus_error_t* orthrus_userdb_verify(orthrus_t *ort,
     return err;
   }
 
-  orthrus__decode_hex(user->lastreply, &last);
+  err = orthrus__decode_hex(user->lastreply, &last);
+  if (err != ORTHRUS_SUCCESS) {
+    return err;
+  }
 
   if (last != resp->reply) {
     return orthrus_error_create(APR_EGENERAL, "invalid response.");
@@ -382,6 +494,12 @@ orthrus_error_t* orthrus_userdb_save(orthrus_t *ort,
     orthrus_response_t *resp;
     orthrus_user_t user;
     orthrus_error_t *err;
+
+    /* This path writes a brand new record, and unlike the lookups it never
+     * passes through userdb_get_user(), so nothing else checks the name. */
+    err = orthrus__validate_username(username);
+    if (err)
+        return err;
 
     user.username = username;
     user.lastreply = NULL;
